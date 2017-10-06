@@ -3068,7 +3068,7 @@ char gserial () {
   }
   while (!Serial.available());
   char temp = Serial.read();
-  if (temp != '\n') pserial(temp);
+  pserial(temp);
   return temp;
 }
 
@@ -3199,6 +3199,20 @@ void setup() {
 
 // Read/Evaluate/Print loop
 
+void chomp_newlines() {
+  for (;;) {
+    while (!Serial.available());
+    char ch = Serial.peek();
+
+    if (ch == '\n') {
+      // Chomp trailing newlines
+      Serial.read();
+    } else {
+      return;
+    }
+  }
+}
+
 void repl (object *env) {
   for (;;) {
     randomSeed(micros());
@@ -3211,6 +3225,9 @@ void repl (object *env) {
       pint(BreakLevel, pserial);
     }
     pfstring(PSTR("> "), pserial);
+
+    chomp_newlines();
+
     object *line = read(gserial);
     if (BreakLevel && line == nil) { pln(pserial); return; }
     if (line == (object *)KET) error(PSTR("Unmatched right bracket"));
