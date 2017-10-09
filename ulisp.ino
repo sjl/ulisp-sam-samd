@@ -33,6 +33,7 @@
 #define pop(y)             ((y) = cdr(y))
 
 #define numberp(x)         ((x)->type == NUMBER)
+#define floatp(x)          ((x)->type == FLOAT)
 #define symbolp(x)         ((x)->type == SYMBOL)
 #define stringp(x)         ((x)->type == STRING)
 #define characterp(x)      ((x)->type == CHARACTER)
@@ -50,7 +51,7 @@
 // Constants
 
 const int TRACEMAX = 3; // Number of traced functions
-enum type { ZERO=0, SYMBOL=2, NUMBER=4, STREAM=6, CHARACTER=8, STRING=10, PAIR=12 };  // STRING and PAIR must be last
+enum type { ZERO=0, SYMBOL=2, NUMBER=4, STREAM=6, CHARACTER=8, FLOAT=10, STRING=12, PAIR=14 };  // STRING and PAIR must be last
 enum token { UNUSED, BRA, KET, QUO, DOT };
 enum stream { SERIALSTREAM, I2CSTREAM, SPISTREAM };
 
@@ -65,7 +66,11 @@ ODDP, EVENP, CHAR, CHARCODE, CODECHAR, CHARACTERP, STRINGP, STRINGEQ, STRINGLESS
 STRINGFN, CONCATENATE, SUBSEQ, READFROMSTRING, PRINCTOSTRING, PRIN1TOSTRING, LOGAND, LOGIOR, LOGXOR,
 LOGNOT, ASH, LOGBITP, EVAL, GLOBALS, LOCALS, MAKUNBOUND, BREAK, READ, PRIN1, PRINT, PRINC, TERPRI,
 READBYTE, READLINE, WRITEBYTE, WRITESTRING, WRITELINE, RESTARTI2C, GC, ROOM, SAVEIMAGE, LOADIMAGE, CLS,
-PINMODE, DIGITALREAD, DIGITALWRITE, ANALOGREAD, ANALOGWRITE, DELAY, MILLIS, NOTE, EDIT, PPRINT, ENDFUNCTIONS };
+PINMODE, DIGITALREAD, DIGITALWRITE, ANALOGREAD, ANALOGWRITE, DELAY, MILLIS, NOTE, EDIT, PPRINT,
+
+FLOATP,
+
+ENDFUNCTIONS };
 
 // Typedefs
 
@@ -82,6 +87,7 @@ typedef struct sobject {
       union {
         symbol_t name;
         int integer;
+	float single_float;
       };
     };
   };
@@ -197,6 +203,13 @@ object *number (int n) {
   object *ptr = myalloc();
   ptr->type = NUMBER;
   ptr->integer = n;
+  return ptr;
+}
+
+object *single_float (float f) {
+  object *ptr = myalloc();
+  ptr->type = FLOAT;
+  ptr->single_float = f;
   return ptr;
 }
 
@@ -540,6 +553,11 @@ int integer (object *obj){
   return obj->integer;
 }
 
+float fromfloat (object *obj){
+  if (!floatp(obj)) error(PSTR("Not a float"));
+  return obj->single_float;
+}
+
 int fromchar (object *obj){
   if (!characterp(obj)) error(PSTR("Not a character"));
   return obj->integer;
@@ -559,8 +577,9 @@ int eq (object *arg1, object *arg2) {
   int same_value = (arg1->cdr == arg2->cdr);
   int same_symbol = (symbolp(arg1) && symbolp(arg2) && same_value);
   int same_number = (numberp(arg1) && numberp(arg2) && same_value);
+  int same_float = (floatp(arg1) && floatp(arg2) && same_value);
   int same_character = (characterp(arg1) && characterp(arg2) && same_value);
-  return same_object || same_symbol || same_number || same_character;
+  return same_object || same_symbol || same_number || same_float || same_character;
 }
 
 int listlength (object *list) {
@@ -918,7 +937,9 @@ void noTone (int pin) {
   (void) pin;
 }
 
-const int scale[] PROGMEM = {4186,4435,4699,4978,5274,5588,5920,6272,6645,7040,7459,7902};
+const int scale[] PROGMEM = {
+  4186,4435,4699,4978,5274,5588,5920,6272,6645,7040,7459,7902
+};
 
 void playnote (int pin, int note, int octave) {
   int prescaler = 8 - octave - note/12;
@@ -997,32 +1018,86 @@ object *sp_pop (object *args, object *env) {
 
 object *sp_incf (object *args, object *env) {
   object **loc = place(first(args), env);
-  int increment = 1;
-  int result = integer(*loc);
   args = cdr(args);
-  if (args != NULL) increment = integer(eval(first(args), env));
-  #if defined(checkoverflow)
-  if (increment < 1) { if (INT_MIN - increment > result) error(PSTR("'incf' arithmetic overflow")); }
-  else { if (INT_MAX - increment < result) error(PSTR("'incf' arithmetic overflow")); }
-  #endif
-  result = result + increment;
-  *loc = number(result);
-  return *loc;
+
+  object *x = *loc;
+  object *inc = (args != NULL) ? eval(first(args), env) : NULL;
+  bool fx = floatp(x);
+  bool fi = (inc != NULL) && floatp(inc);
+
+  if (fx || fi) {
+    float increment;
+    float value = (fx ? fromfloat(x) : (float)integer(x));
+
+    if (inc == NULL) {
+      increment = 1.0;
+    } else if (fi) {
+      increment = fromfloat(inc);
+    } else {
+      increment = integer(inc);
+    }
+
+    *loc = single_float(value + increment);
+    return *loc;
+  } else {
+    int increment;
+    int value = integer(x);
+
+    if (inc == NULL) {
+      increment = 1;
+    } else {
+      increment = integer(inc);
+    }
+
+    #if defined(checkoverflow)
+    if (increment < 1) { if (INT_MIN - increment > value) error(PSTR("'incf' arithmetic overflow")); }
+    else { if (INT_MAX - increment < value) error(PSTR("'incf' arithmetic overflow")); }
+    #endif
+    *loc = number(value + increment);
+    return *loc;
+  }
 }
 
 object *sp_decf (object *args, object *env) {
   object **loc = place(first(args), env);
-  int decrement = 1;
-  int result = integer(*loc);
   args = cdr(args);
-  if (args != NULL) decrement = integer(eval(first(args), env));
-  #if defined(checkoverflow)
-  if (decrement < 1) { if (INT_MAX + decrement < result) error(PSTR("'decf' arithmetic overflow")); }
-  else { if (INT_MIN + decrement > result) error(PSTR("'decf' arithmetic overflow")); }
-  #endif
-  result = result - decrement;
-  *loc = number(result);
-  return *loc;
+
+  object *x = *loc;
+  object *dec = (args != NULL) ? eval(first(args), env) : NULL;
+  bool fx = floatp(x);
+  bool fi = (dec != NULL) && floatp(dec);
+
+  if (fx || fi) {
+    float decrement;
+    float value = (fx ? fromfloat(x) : (float)integer(x));
+
+    if (dec == NULL) {
+      decrement = 1.0;
+    } else if (fi) {
+      decrement = fromfloat(dec);
+    } else {
+      decrement = integer(dec);
+    }
+
+    *loc = single_float(value - decrement);
+    return *loc;
+  } else {
+    int decrement;
+    int value = integer(x);
+
+    if (dec == NULL) {
+      decrement = 1;
+    } else {
+      decrement = integer(dec);
+    }
+
+    #if defined(checkoverflow)
+    if (decrement < 1) { if (INT_MAX + decrement < value) error(PSTR("'decf' arithmetic overflow")); }
+    else { if (INT_MIN + decrement > value) error(PSTR("'decf' arithmetic overflow")); }
+    #endif
+    *loc = number(value - decrement);
+    return *loc;
+  }
 }
 
 object *sp_setf (object *args, object *env) {
@@ -1312,6 +1387,11 @@ object *fn_numberp (object *args, object *env) {
   return numberp(first(args)) ? tee : nil;
 }
 
+object *fn_floatp (object *args, object *env) {
+  (void) env;
+  return floatp(first(args)) ? tee : nil;
+}
+
 object *fn_symbolp (object *args, object *env) {
   (void) env;
   return symbolp(first(args)) ? tee : nil;
@@ -1569,11 +1649,30 @@ object *fn_mapcar (object *args, object *env) {
 
 // Arithmetic functions
 
+object *add_floats(object *args, int acc) {
+  float result = acc;
+
+  while (args != NULL) {
+    object *arg = car(args);
+    result += floatp(arg) ? fromfloat(arg) : integer(arg);
+    args = cdr(args);
+  }
+
+  return single_float(result);
+}
+
 object *fn_add (object *args, object *env) {
   (void) env;
   int result = 0;
+
   while (args != NULL) {
-    int temp = integer(car(args));
+    object *arg = car(args);
+
+    if (floatp(arg)) {
+      return add_floats(args, result);
+    }
+
+    int temp = integer(arg);
     #if defined(checkoverflow)
     if (temp < 1) { if (INT_MIN - temp > result) error(PSTR("'+' arithmetic overflow")); }
     else { if (INT_MAX - temp < result) error(PSTR("'+' arithmetic overflow")); }
@@ -1584,58 +1683,164 @@ object *fn_add (object *args, object *env) {
   return number(result);
 }
 
-object *fn_subtract (object *args, object *env) {
-  (void) env;
-  int result = integer(car(args));
-  args = cdr(args);
-  if (args == NULL) {
+object *subtract_floats(object *args, float acc) {
+  float result = acc;
+
+  while (args != NULL) {
+    object *arg = car(args);
+    result -= floatp(arg) ? fromfloat(arg) : integer(arg);
+    args = cdr(args);
+  }
+
+  return single_float(result);
+}
+
+object *negate(object *arg) {
+  if (numberp(arg)) {
+    int result = integer(arg);
+
     #if defined(checkoverflow)
     if (result == INT_MIN) error(PSTR("'-' arithmetic overflow"));
     #endif
+
     return number(-result);
+  } else {
+    return single_float(-fromfloat(arg));
   }
+}
+
+object *fn_subtract (object *args, object *env) {
+  (void) env;
+
+  object *arg = car(args);
+  args = cdr(args);
+
+  if (args == NULL) {
+    return negate(arg);
+  } else if (floatp(arg)) {
+    return subtract_floats(args, fromfloat(arg));
+  } else {
+    int result = integer(arg);
+
+    while (args != NULL) {
+      arg = car(args);
+
+      if (floatp(arg)) {
+        return subtract_floats(args, result);
+      }
+
+      int temp = integer(car(args));
+      #if defined(checkoverflow)
+      if (temp < 1) { if (INT_MAX + temp < result) error(PSTR("'-' arithmetic overflow")); }
+      else { if (INT_MIN + temp > result) error(PSTR("'-' arithmetic overflow")); }
+      #endif
+      result = result - temp;
+      args = cdr(args);
+    }
+    return number(result);
+  }
+}
+
+object *multiply_floats(object *args, int acc) {
+  float result = acc;
+
   while (args != NULL) {
-    int temp = integer(car(args));
-    #if defined(checkoverflow)
-    if (temp < 1) { if (INT_MAX + temp < result) error(PSTR("'-' arithmetic overflow")); }
-    else { if (INT_MIN + temp > result) error(PSTR("'-' arithmetic overflow")); }
-    #endif
-    result = result - temp;
+    object *arg = car(args);
+    result *= floatp(arg) ? fromfloat(arg) : integer(arg);
     args = cdr(args);
   }
-  return number(result);
+
+  return single_float(result);
 }
 
 object *fn_multiply (object *args, object *env) {
   (void) env;
   int result = 1;
+
   while (args != NULL){
+    object *arg = car(args);
+
+    if (floatp(arg)) {
+      return multiply_floats(args, result);
+    }
+
     #if defined(checkoverflow)
-    signed long temp = (signed long) result * integer(car(args));
+    signed long temp = (signed long) result * integer(arg);
     if ((temp > INT_MAX) || (temp < INT_MIN)) error(PSTR("'*' arithmetic overflow"));
     result = temp;
     #else
-    result = result * integer(car(args));
+    result = result * integer(arg);
     #endif
+
     args = cdr(args);
   }
   return number(result);
 }
 
-object *fn_divide (object *args, object *env) {
-  (void) env;
-  int result = integer(first(args));
-  args = cdr(args);
+object *divide_floats(object *args, int acc) {
+  float result = acc;
+
   while (args != NULL) {
-    int arg = integer(car(args));
-    if (arg == 0) error(PSTR("Division by zero"));
-    #if defined(checkoverflow)
-    if ((result == INT_MIN) && (arg == -1)) error(PSTR("'/' arithmetic overflow"));
-    #endif
-    result = result / arg;
+    object *arg = car(args);
+
+    if (floatp(arg)) {
+      float f = fromfloat(arg);
+      if (f == 0.0) error(PSTR("Division by zero"));
+      result /= f;
+    } else {
+      int i = integer(arg);
+      if (i == 0) error(PSTR("Division by zero"));
+      result /= i;
+    }
     args = cdr(args);
   }
-  return number(result);
+
+  return single_float(result);
+}
+
+object *reciprocate (object* arg) {
+  if (floatp(arg)) {
+    float f = fromfloat(arg);
+    if (f == 0.0) error(PSTR("Division by zero"));
+    return single_float(1.0 / f);
+  } else {
+    int i = integer(arg);
+    if (i == 0) error(PSTR("Division by zero"));
+    return number(1 / i);
+  }
+  return number(789);
+}
+
+object *fn_divide (object *args, object *env) {
+  (void) env;
+  object* arg = car(args);
+  args = cdr(args);
+
+  if (args == NULL) {
+    return reciprocate(arg);
+  } else if (floatp(arg)) {
+    return divide_floats(args, fromfloat(arg));
+  } else {
+    int result = integer(arg);
+
+    while (args != NULL) {
+      arg = car(args);
+
+      if (floatp(arg)) {
+        return divide_floats(args, result);
+      }
+
+      int i = integer(arg);
+      if (i == 0) error(PSTR("Division by zero"));
+      #if defined(checkoverflow)
+      if ((result == INT_MIN) && (i == -1)) error(PSTR("'/' arithmetic overflow"));
+      #endif
+      result = result / i;
+      args = cdr(args);
+    }
+
+    return number(result);
+  }
 }
 
 object *fn_mod (object *args, object *env) {
@@ -1650,68 +1855,179 @@ object *fn_mod (object *args, object *env) {
 
 object *fn_oneplus (object *args, object *env) {
   (void) env;
-  int result = integer(first(args));
-  #if defined(checkoverflow)
-  if (result == INT_MAX) error(PSTR("'1+' arithmetic overflow"));
-  #endif
-  return number(result + 1);
+
+  object* arg = first(args);
+
+  if (floatp(arg)) {
+    return single_float(fromfloat(arg) + 1.0);
+  } else {
+    int result = integer(arg);
+    #if defined(checkoverflow)
+    if (result == INT_MAX) error(PSTR("'1+' arithmetic overflow"));
+    #endif
+    return number(result + 1);
+  }
 }
 
 object *fn_oneminus (object *args, object *env) {
   (void) env;
-  int result = integer(first(args));
-  #if defined(checkoverflow)
-  if (result == INT_MIN) error(PSTR("'1-' arithmetic overflow"));
-  #endif
-  return number(result - 1);
+
+  object* arg = first(args);
+
+  if (floatp(arg)) {
+    return single_float(fromfloat(arg) - 1.0);
+  } else {
+    int result = integer(arg);
+    #if defined(checkoverflow)
+    if (result == INT_MIN) error(PSTR("'1-' arithmetic overflow"));
+    #endif
+    return number(result - 1);
+  }
 }
 
 object *fn_abs (object *args, object *env) {
   (void) env;
-  int result = integer(first(args));
-  #if defined(checkoverflow)
-  if (result == INT_MIN) error(PSTR("'abs' arithmetic overflow"));
-  #endif
-  return number(abs(result));
+  object *arg = first(args);
+
+  if (floatp(arg)) {
+    return single_float(abs(fromfloat(arg)));
+  } else {
+    int result = integer(arg);
+    #if defined(checkoverflow)
+    if (result == INT_MIN) error(PSTR("'abs' arithmetic overflow"));
+    #endif
+    return number(abs(result));
+  }
 }
 
 object *fn_random (object *args, object *env) {
   (void) env;
   int arg = integer(first(args));
-  return number(random(arg));
+
+  if (cdr(args) == NULL) {
+    return number(random(arg));
+  } else {
+    int arg2 = integer(second(args));
+    return number(random(arg, arg2));
+  }
 }
 
 object *fn_max (object *args, object *env) {
   (void) env;
-  int result = integer(first(args));
+
+  object* result = first(args);
   args = cdr(args);
+
   while (args != NULL) {
-    result = max(result,integer(car(args)));
+    object *arg = car(args);
     args = cdr(args);
+
+    if (greater(arg, result)) result = arg;
   }
-  return number(result);
+
+  return result;
 }
 
 object *fn_min (object *args, object *env) {
   (void) env;
-  int result = integer(first(args));
+
+  object* result = first(args);
   args = cdr(args);
+
   while (args != NULL) {
-    result = min(result,integer(car(args)));
+    object *arg = car(args);
     args = cdr(args);
+
+    if (greater(result, arg)) result = arg;
   }
-  return number(result);
+
+  return result;
 }
 
 // Arithmetic comparisons
 
+bool numeric_equal(object *a, object *b) {
+  bool fa = floatp(a);
+  bool fb = floatp(b);
+
+  if (fa && fb) {
+    return fromfloat(a) == fromfloat(b);
+  } else if (fa) {
+    return fromfloat(a) == integer(b);
+  } else if (fb) {
+    return integer(a) == fromfloat(b);
+  } else {
+    return integer(a) == integer(b);
+  }
+}
+
+bool greater(object *a, object *b) {
+  bool fa = floatp(a);
+  bool fb = floatp(b);
+
+  if (fa && fb) {
+    return fromfloat(a) > fromfloat(b);
+  } else if (fa) {
+    return fromfloat(a) > integer(b);
+  } else if (fb) {
+    return integer(a) > fromfloat(b);
+  } else {
+    return integer(a) > integer(b);
+  }
+}
+
+bool less(object *a, object *b) {
+  bool fa = floatp(a);
+  bool fb = floatp(b);
+
+  if (fa && fb) {
+    return fromfloat(a) < fromfloat(b);
+  } else if (fa) {
+    return fromfloat(a) < integer(b);
+  } else if (fb) {
+    return integer(a) < fromfloat(b);
+  } else {
+    return integer(a) < integer(b);
+  }
+}
+
+bool greater_eq(object *a, object *b) {
+  bool fa = floatp(a);
+  bool fb = floatp(b);
+
+  if (fa && fb) {
+    return fromfloat(a) >= fromfloat(b);
+  } else if (fa) {
+    return fromfloat(a) >= integer(b);
+  } else if (fb) {
+    return integer(a) >= fromfloat(b);
+  } else {
+    return integer(a) >= integer(b);
+  }
+}
+
+bool less_eq(object *a, object *b) {
+  bool fa = floatp(a);
+  bool fb = floatp(b);
+
+  if (fa && fb) {
+    return fromfloat(a) <= fromfloat(b);
+  } else if (fa) {
+    return fromfloat(a) <= integer(b);
+  } else if (fb) {
+    return integer(a) <= fromfloat(b);
+  } else {
+    return integer(a) <= integer(b);
+  }
+}
+
 object *fn_numeq (object *args, object *env) {
   (void) env;
-  int arg1 = integer(first(args));
+  object *arg1 = first(args);
   args = cdr(args);
   while (args != NULL) {
-    int arg2 = integer(first(args));
-    if (!(arg1 == arg2)) return nil;
+    object *arg2 = first(args);
+    if (!numeric_equal(arg1, arg2)) return nil;
     arg1 = arg2;
     args = cdr(args);
   }
@@ -1720,11 +2036,11 @@ object *fn_numeq (object *args, object *env) {
 
 object *fn_less (object *args, object *env) {
   (void) env;
-  int arg1 = integer(first(args));
+  object *arg1 = first(args);
   args = cdr(args);
   while (args != NULL) {
-    int arg2 = integer(first(args));
-    if (!(arg1 < arg2)) return nil;
+    object *arg2 = first(args);
+    if (!less(arg1, arg2)) return nil;
     arg1 = arg2;
     args = cdr(args);
   }
@@ -1733,11 +2049,11 @@ object *fn_less (object *args, object *env) {
 
 object *fn_lesseq (object *args, object *env) {
   (void) env;
-  int arg1 = integer(first(args));
+  object *arg1 = first(args);
   args = cdr(args);
   while (args != NULL) {
-    int arg2 = integer(first(args));
-    if (!(arg1 <= arg2)) return nil;
+    object *arg2 = first(args);
+    if (!less_eq(arg1, arg2)) return nil;
     arg1 = arg2;
     args = cdr(args);
   }
@@ -1746,11 +2062,11 @@ object *fn_lesseq (object *args, object *env) {
 
 object *fn_greater (object *args, object *env) {
   (void) env;
-  int arg1 = integer(first(args));
+  object *arg1 = first(args);
   args = cdr(args);
   while (args != NULL) {
-    int arg2 = integer(first(args));
-    if (!(arg1 > arg2)) return nil;
+    object *arg2 = first(args);
+    if (!greater(arg1, arg2)) return nil;
     arg1 = arg2;
     args = cdr(args);
   }
@@ -1759,11 +2075,11 @@ object *fn_greater (object *args, object *env) {
 
 object *fn_greatereq (object *args, object *env) {
   (void) env;
-  int arg1 = integer(first(args));
+  object *arg1 = first(args);
   args = cdr(args);
   while (args != NULL) {
-    int arg2 = integer(first(args));
-    if (!(arg1 >= arg2)) return nil;
+    object *arg2 = first(args);
+    if (!greater_eq(arg1, arg2)) return nil;
     arg1 = arg2;
     args = cdr(args);
   }
@@ -1772,13 +2088,13 @@ object *fn_greatereq (object *args, object *env) {
 
 object *fn_noteq (object *args, object *env) {
   (void) env;
-  while (args != NULL) {   
+  while (args != NULL) {
     object *nargs = args;
-    int arg1 = integer(first(nargs));
+    object *arg1 = first(nargs);
     nargs = cdr(nargs);
     while (nargs != NULL) {
-       int arg2 = integer(first(nargs));
-       if (arg1 == arg2) return nil;
+       object *arg2 = first(nargs);
+       if (numeric_equal(arg1, arg2)) return nil;
        nargs = cdr(nargs);
     }
     args = cdr(args);
@@ -1788,23 +2104,41 @@ object *fn_noteq (object *args, object *env) {
 
 object *fn_plusp (object *args, object *env) {
   (void) env;
-  int arg = integer(first(args));
-  if (arg > 0) return tee;
-  else return nil;
+  object *arg = first(args);
+
+  if (floatp(arg)) {
+    if (fromfloat(arg) > 0.0) return tee;
+  } else {
+    if (integer(arg) > 0) return tee;
+  }
+
+  return nil;
 }
 
 object *fn_minusp (object *args, object *env) {
   (void) env;
-  int arg = integer(first(args));
-  if (arg < 0) return tee;
-  else return nil;
+  object *arg = first(args);
+
+  if (floatp(arg)) {
+    if (fromfloat(arg) < 0.0) return tee;
+  } else {
+    if (integer(arg) < 0) return tee;
+  }
+
+  return nil;
 }
 
 object *fn_zerop (object *args, object *env) {
   (void) env;
-  int arg = integer(first(args));
-  if (arg == 0) return tee;
-  else return nil;
+  object *arg = first(args);
+
+  if (floatp(arg)) {
+    if (fromfloat(arg) == 0.0) return tee;
+  } else {
+    if (integer(arg) == 0) return tee;
+  }
+
+  return nil;
 }
 
 object *fn_oddp (object *args, object *env) {
@@ -2582,6 +2916,8 @@ const char string148[] PROGMEM = "note";
 const char string149[] PROGMEM = "edit";
 const char string150[] PROGMEM = "pprint";
 
+const char string151[] PROGMEM = "floatp";
+
 const tbl_entry_t lookup_table[] PROGMEM = {
   { string0, NULL, NIL, NIL },
   { string1, NULL, 0, 0 },
@@ -2663,12 +2999,12 @@ const tbl_entry_t lookup_table[] PROGMEM = {
   { string77, fn_add, 0, 127 },
   { string78, fn_subtract, 1, 127 },
   { string79, fn_multiply, 0, 127 },
-  { string80, fn_divide, 2, 127 },
+  { string80, fn_divide, 1, 127 },
   { string81, fn_mod, 2, 2 },
   { string82, fn_oneplus, 1, 1 },
   { string83, fn_oneminus, 1, 1 },
   { string84, fn_abs, 1, 1 },
-  { string85, fn_random, 1, 1 },
+  { string85, fn_random, 1, 2 },
   { string86, fn_max, 1, 127 },
   { string87, fn_min, 1, 127 },
   { string88, fn_numeq, 1, 127 },
@@ -2734,6 +3070,7 @@ const tbl_entry_t lookup_table[] PROGMEM = {
   { string148, fn_note, 0, 3 },
   { string149, fn_edit, 1, 1 },
   { string150, fn_pprint, 1, 1 },
+  { string151, fn_floatp, 1, 1 },
 };
 
 // Table lookup functions
@@ -2816,7 +3153,7 @@ object *eval (object *form, object *env) {
   
   if (form == NULL) return nil;
 
-  if (numberp(form) || characterp(form) || stringp(form)) return form;
+  if (numberp(form) || floatp(form) || characterp(form) || stringp(form)) return form;
 
   if (symbolp(form)) {
     symbol_t name = form->name;
@@ -3013,6 +3350,32 @@ void pint (int i, pfun_t pfun) {
   }
 }
 
+void pfloat (float f, pfun_t pfun) {
+  if (isnan(f)) {
+    pfstring(PSTR("NaN"), pfun);
+    return;
+  }
+
+  if (f < 0) {
+    pfun('-');
+    f = -f;
+  }
+
+  int i = (int) f;
+  pint(i, pfun);
+  pfun('.');
+
+  float rem = f - i;
+  float mul = 10.0;
+
+   do {
+    int d = (int) (rem * mul);
+    pfun(d + '0');
+    rem -= d / mul;
+    mul *= 10.0;
+  } while (rem > 0.00001);
+}
+
 inline void pln (pfun_t pfun) {
   pfun('\n');
 }
@@ -3040,6 +3403,8 @@ void printobject(object *form, pfun_t pfun){
     pfun(')');
   } else if (numberp(form)) {
     pint(integer(form), pfun);
+  } else if (floatp(form)) {
+    pfloat(fromfloat(form), pfun);
   } else if (symbolp(form)) {
     if (form->name != NOTHING) pstring(name(form), pfun);
   } else if (characterp(form)) {
@@ -3096,6 +3461,10 @@ object *nextitem (gfun_t gfun) {
   char *buffer = SymbolTop;
   int bufmax = SYMBOLTABLESIZE-(buffer-SymbolTable)-1; // Max index
   unsigned int result = 0;
+
+  char isfloat = 0;
+  float floatresult = 0.0;
+
   if (ch == '+') {
     buffer[index++] = ch;
     ch = gfun();
@@ -3115,11 +3484,25 @@ object *nextitem (gfun_t gfun) {
   int isnumber = (digitvalue(ch)<base);
   buffer[2] = '\0'; // In case variable is one letter
 
+  float divisor = (float) base;
   while(!isspace(ch) && ch != ')' && ch != '(' && index < bufmax) {
     buffer[index++] = ch;
-    int temp = digitvalue(ch);
-    result = result * base + temp;
-    isnumber = isnumber && (digitvalue(ch)<base);
+
+    if (ch == '.') {
+      isfloat = 1;
+      floatresult = result;
+    } else {
+      int temp = digitvalue(ch);
+
+      if (isfloat) {
+        floatresult += temp / divisor;
+        divisor *= base;
+      } else {
+        result = result * base + temp;
+        isnumber = isnumber && (digitvalue(ch)<base);
+      }
+    }
+
     ch = gfun();
   }
 
@@ -3127,7 +3510,9 @@ object *nextitem (gfun_t gfun) {
   if (ch == ')') LastChar = ')';
   if (ch == '(') LastChar = '(';
 
-  if (isnumber) {
+  if (isfloat) {
+    return single_float(floatresult*sign);
+  } else if (isnumber) {
     if (base == 10 && result > ((unsigned int)INT_MAX+(1-sign)/2)) 
       error(PSTR("Number out of range"));
     return number(result*sign);
